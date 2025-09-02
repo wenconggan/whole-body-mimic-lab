@@ -98,7 +98,6 @@ def subtract_frame_transforms_mujoco(pos_a, quat_a, pos_b, quat_b):
     return rel_pos, rel_quat
 
 def quaternion_conjugate(q):
-    """四元数共轭: [w, x, y, z] -> [w, -x, -y, -z]"""
     return np.array([q[0], -q[1], -q[2], -q[3]])
 
 def quaternion_multiply(q1, q2):
@@ -144,20 +143,17 @@ if __name__ == "__main__":
         elif prop.key == "action_scale":
             action_scale_seq = np.array([float(x) for x in values])
 
-    # 对齐到 mujoco_joint_index
     joint_pos_array = np.array([joint_pos_seq[joint_names.index(joint)] for joint in mujoco_joint_index])
     stiffness_array = np.array([stiffness_seq[joint_names.index(joint)] for joint in mujoco_joint_index])
     damping_array = np.array([damping_seq[joint_names.index(joint)] for joint in mujoco_joint_index])
     action_scale_array = np.array([action_scale_seq[joint_names.index(joint)] for joint in mujoco_joint_index])
 
-    # 打印表格
     print(f"{'Joint Name':20} {'Pos':>8} {'Stiffness':>10} {'Damping':>8} {'ActionScale':>12}")
     print("-" * 60)
     for i, joint in enumerate(mujoco_joint_index):
         print(
             f"{joint:20} {joint_pos_array[i]:8.3f} {stiffness_array[i]:10.3f} {damping_array[i]:8.3f} {action_scale_array[i]:12.3f}")
 
-    # 打印其他属性
     for prop in model.metadata_props:
         if prop.key not in ["joint_names", "default_joint_pos", "joint_stiffness", "joint_damping", "action_scale"]:
             print(f"{prop.key}: {prop.value}")
