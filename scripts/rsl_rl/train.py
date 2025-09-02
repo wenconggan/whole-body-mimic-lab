@@ -17,12 +17,7 @@ import cli_args  # isort: skip
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
-parser.add_argument(
-    "--motion_file",
-    type=str,
-    default=None,
-    help="Path to the motion file (e.g., .npz) to load."
-)
+parser.add_argument("--motion_file",type=str,default=None,help="Path to the motion file (e.g., .npz) to load.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
@@ -105,7 +100,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # api = wandb.Api()
     # artifact = api.artifact(registry_name)
-    # env_cfg.commands.motion.motion_file = "/home/wenconggan/whole_body_tracking/motion/chars.npz"
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)

@@ -151,24 +151,10 @@ class ObservationsCfg:
         策略观测组：用于强化学习智能体的输入（带噪声，模拟真实环境感知）
         """
 
-        # 1. 运动指令观测：获取目标运动指令（如关节目标位置/速度）
         command = ObsTerm(
             func=mdp.generated_commands,  # 自定义函数：获取生成的运动指令
             params={"command_name": "motion"}  # 参数：指令名称为"motion"
         )
-        # # 2. 运动锚点相对位置观测（机器人锚点坐标系下）
-        # motion_anchor_pos_b = ObsTerm(
-        #     func=mdp.motion_anchor_pos_b,  # 自定义函数：计算目标锚点相对机器人锚点的位置
-        #     params={"command_name": "motion"},  # 参数：关联"motion"指令
-        #     noise=Unoise(n_min=-0.25, n_max=0.25)  # 加性噪声：±0.25m（模拟位置传感器噪声）
-        # )
-        # # 3. 运动锚点相对姿态观测（机器人锚点坐标系下）
-        # motion_anchor_ori_b = ObsTerm(
-        #     func=mdp.motion_anchor_ori_b,  # 自定义函数：计算目标锚点相对机器人锚点的姿态
-        #     params={"command_name": "motion"},
-        #     noise=Unoise(n_min=-0.05, n_max=0.05)  # 加性噪声：±0.05rad（模拟姿态传感器噪声）
-        # )
-        # 4. 机器人基座线速度观测（世界坐标系下）
         projected_gravity = ObsTerm(
             func=mdp.projected_gravity,  # 自定义函数：获取机器人基座线速度
             noise=Unoise(n_min=-0.05, n_max=0.05),  # 加性噪声：±0.5m/s（模拟IMU线速度噪声）

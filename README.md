@@ -1,4 +1,4 @@
-# X2Mimic Motion Trakcing Lab Code
+# Droid X2 Mimic Motion Trakcing Lab Code
 
 [![IsaacSim](https://img.shields.io/badge/IsaacSim-4.5.0-silver.svg)](https://docs.omniverse.nvidia.com/isaacsim/latest/overview.html)
 [![Isaac Lab](https://img.shields.io/badge/IsaacLab-2.1.0-silver)](https://isaac-sim.github.io/IsaacLab)
@@ -36,6 +36,17 @@ python -m pip install -e source/x2_mimic_lab
 
 
 ```bash
+
+python scripts/csv_to_npz_x2.py \
+  --input_file /xxx/xxx.csv \
+  --input_fps 30 \
+  --output_name {motion_name} \
+  --save_to xxx.npz \
+  --no_wandb 
+  --headless
+'''
+
+'''
 python scripts/csv_to_npz.py --input_file {motion_name}.csv --input_fps 30 --output_name {motion_name} --headless
 ```
 
@@ -44,6 +55,13 @@ This will automatically upload the processed motion file to the WandB registry w
 - Test if the WandB registry works properly by replaying the motion in Isaac Sim:
 ；
 ```bash
+
+# 重放NPZ文件的命令示例：
+python scripts/replay_npz_x2.py \
+  --motion_file /path/xxx.npz \
+  --headless                                         
+'''
+
 python scripts/replay_npz.py --registry_name={your-organization}-org/wandb-registry-motions/{motion_name}
 ```
 
@@ -56,21 +74,42 @@ python scripts/replay_npz.py --registry_name={your-organization}-org/wandb-regis
 - Train policy by the following command:
 
 ```bash
-python scripts/rsl_rl/train.py --task=Tracking-Flat-G1-v0 \
---registry_name {your-organization}-org/wandb-registry-motions/{motion_name} \
---headless --logger wandb --log_project_name {project_name} --run_name {run_name}
+
+ python scripts/rsl_rl/train.py --task=x2_mimic --headless --motion_file /home/xxx/whole_body_tracking/motion/chars.npz
+
+python scripts/rsl_rl/train.py --task=x2_mimic --headless --motion_file /path/xxx.npz
 ```
+
 
 ### Policy Evaluation
 
 - Play the trained policy by the following command:
 
 ```bash
-python scripts/rsl_rl/play.py --task=Tracking-Flat-G1-v0 --num_envs=2 --wandb_path={wandb-run-path}
+
+python scripts/rsl_rl/play.py \
+    --task x2_mimic \
+    --num_envs=2 \
+    --motion_file /path/xxx.npz \
+    --resume_path /path/xxx.pt
+
+python scripts/rsl_rl/play.py \
+    --task x2_mimic \
+    --num_envs=2 \
+    --motion_file /home/wenconggan/whole_body_tracking/motion/chars.npz \
+    --resume_path /home/wenconggan/whole_body_tracking/logs/rsl_rl/x2_flat/2025-09-01_11-17-33/model_4000.pt
+
+
 ```
 
-The WandB run path can be located in the run overview. It follows the format {your_organization}/{project_name}/ along
-with a unique 8-character identifier. Note that run_name is different from run_path.
+- Sim2Sim Mujoco :
+
+```bash
+
+cd scripts/rsl_rl
+python sim2sim.py
+
+```
 
 ## Code Structure
 
@@ -107,6 +146,6 @@ Below is an overview of the code structure for this repository:
   calculation.
 
 - **`scripts`**
-  Includes utility scripts for preprocessing motion data, training policies, and evaluating trained policies.
+  Includes utility scripts for preprocessing motion data, training policies,evaluating trained policies and Sim2sim in Mujuco.
 
 This structure is designed to ensure modularity and ease of navigation for developers expanding the project.

@@ -445,20 +445,3 @@ if __name__ == "__main__":
     # 关闭仿真应用（释放资源）
     simulation_app.close()
 
-'''
-# 运行脚本的命令示例（转换CSV到NPZ）：
-python scripts/csv_to_npz.py \
-  --input_file /home/jojo/PycharmProjects/whole_body_tracking/retargeted_motions/x2/dance1_subject1.csv \
-  --input_fps 30 \
-  --output_name {motion_name} \
-  --save_to /home/jojo/PycharmProjects/whole_body_tracking/retargeted_motions/x2/dance1_subject1.npz \
-  --no_wandb \
-  --headless
-'''
-
-'''
-# 重放NPZ文件的命令示例：
-python scripts/replay_npz.py \
-  --motion_file /home/jojo/PycharmProjects/whole_body_tracking/retargeted_motions/g1/dance1_subject1.npz \
-  --headless                                          # 无头模式运行
-'''

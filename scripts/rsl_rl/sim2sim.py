@@ -1,44 +1,27 @@
-import math
-import os
-import sys
 import time
-import torch
-script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
-sys.path.append(project_root)
+
+import mujoco.viewer
 import mujoco
 import numpy as np
-import mujoco.viewer
-import mujoco_viewer
-from tqdm import tqdm
-from core.config import Config
-from collections import deque
-import numpy as np
-from scipy.spatial.transform import Rotation as R
-import onnxruntime
-import glfw
-
-import onnxruntime
+# from legged_gym import LEGGED_GYM_ROOT_DIR
 import torch
+import yaml
+
+import onnxruntime
+
 import numpy as np
+import mujoco
+from scipy.spatial.transform import Rotation as R
 
-def load_onnx_policy(path: str):
-    session = onnxruntime.InferenceSession(
-        path,
-        providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
-    )
-    input_names = [inp.name for inp in session.get_inputs()]
+xml_path = "../../source/whole_body_tracking/whole_body_tracking/assets/x2/x2.xml"
+# xml_path:  "/home/ym/Whole_body_tracking/unitree_description/g1_xml.xml"
 
-    def run_inference(obs_numpy: np.ndarray, time_step_numpy: np.ndarray) -> torch.Tensor:
-        ort_inputs = {
-            input_names[0]: obs_numpy,       # "obs"
-            input_names[1]: time_step_numpy  # "time_step"
-        }
-        ort_outs = session.run(None, ort_inputs)
-        return torch.tensor(ort_outs[0], dtype=torch.float32, device="cuda:0")
-
-    return run_inference
-
+# Total simulation time
+simulation_duration = 300.0
+# Simulation time step
+simulation_dt = 0.002
+# Controller update frequency (meets the requirement of simulation_dt * controll_decimation=0.02; 50Hz)
+control_decimation = 10
 
 def get_gravity_orientation_from_rpy(roll, pitch):
     rot = R.from_euler('xy', [roll, pitch])
@@ -63,7 +46,6 @@ def quaternion_to_euler_array(quat):
     # Returns roll, pitch, yaw in a NumPy array in radians
     return np.array([roll_x, pitch_y,yaw_z])  # , yaw_z
 
-
 def quat_to_euler(quat):
     x, y, z, w = quat
     t0 = +2.0 * (w * x + y * z)
@@ -77,163 +59,300 @@ def quat_to_euler(quat):
     yaw_z = np.arctan2(t3, t4)
     return np.array([roll_x, pitch_y, yaw_z])
 
-simulation_dt = 0.001
-control_decimation = 20
-num_actions = 18
-num_obs = 96
-num_history = 6
-action_scale = 0.25
-ang_vel_scale = 1
-dof_pos_scale = 1
-dof_vel_scale = 0.05
 
-default_angles = np.array([
-    0.0, 0.0, -0.3,  0.6, -0.3,
-    0.0, 0.0, -0.3,  0.6, -0.3,
-    0.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.0, 0.0
-], dtype=np.float32)
+def quat_rotate_inverse_np(q: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """Rotate a vector by the inverse of a quaternion along the last dimension of q and v (NumPy version).
 
-kps = np.array([200, 200, 200, 200, 30,
-                200, 200, 200, 200, 30,
-                90, 90, 90, 80,
-                90, 90, 90, 80], dtype=np.float32)
+    Args:
+        q: The quaternion in (w, x, y, z). Shape is (..., 4).
+        v: The vector in (x, y, z). Shape is (..., 3).
 
-kds = np.array([2.5, 2.5, 2.5, 2.0, 1.0,
-                2.5, 2.5, 2.5, 2.0, 1.0,
-                2.0, 1.0, 1.0, 1.0,
-                2.0, 1.0, 1.0, 1.0], dtype=np.float32)
+    Returns:
+        The rotated vector in (x, y, z). Shape is (..., 3).
+    """
+    q_w = q[..., 0]
+    q_vec = q[..., 1:]
+    
+    # Component a: v * (2.0 * q_w^2 - 1.0)
+    a = v * np.expand_dims(2.0 * q_w**2 - 1.0, axis=-1)
+    
+    # Component b: cross(q_vec, v) * q_w * 2.0
+    b = np.cross(q_vec, v, axis=-1) * np.expand_dims(q_w, axis=-1) * 2.0
+    
+    # Component c: q_vec * dot(q_vec, v) * 2.0
+    # For efficient computation, handle different dimensionalities
+    if q_vec.ndim == 2:
+        # For 2D case: use matrix multiplication for better performance
+        dot_product = np.sum(q_vec * v, axis=-1, keepdims=True)
+        c = q_vec * dot_product * 2.0
+    else:
+        # For general case: use Einstein summation
+        dot_product = np.expand_dims(np.einsum('...i,...i->...', q_vec, v), axis=-1)
+        c = q_vec * dot_product * 2.0
+    
+    return a - b + c
+def subtract_frame_transforms_mujoco(pos_a, quat_a, pos_b, quat_b):
+    """
+    与IsaacLab中subtract_frame_transforms完全相同的实现（一维版本）
+    计算从坐标系A到坐标系B的相对变换
+    
+    参数:
+        pos_a: 坐标系A的位置 (3,)
+        quat_a: 坐标系A的四元数 (4,) [w, x, y, z]格式
+        pos_b: 坐标系B的位置 (3,)
+        quat_b: 坐标系B的四元数 (4,) [w, x, y, z]格式
+        
+    返回:
+        rel_pos: B相对于A的位置 (3,)
+        rel_quat: B相对于A的旋转四元数 (4,) [w, x, y, z]格式
+    """
+    # 计算相对位置: pos_B_to_A = R_A^T * (pos_B - pos_A)
+    rotm_a = np.zeros(9)
+    mujoco.mju_quat2Mat(rotm_a, quat_a)
+    rotm_a = rotm_a.reshape(3, 3)
+    
+    rel_pos = rotm_a.T @ (pos_b - pos_a)
+    
+    # 计算相对旋转: quat_B_to_A = quat_A^* ⊗ quat_B
+    rel_quat = quaternion_multiply(quaternion_conjugate(quat_a), quat_b)
+    
+    # 确保四元数归一化（与IsaacLab保持一致）
+    rel_quat = rel_quat / np.linalg.norm(rel_quat)
+    
+    return rel_pos, rel_quat
 
-joint_limit_lo = [-0.7854, -0.3490, -2.4434, -0., -1.2217,
-                  -0.7854, -0.524, -2.4434, -0, -1.2217,
-                  -2, -0.350, -2.618, -1.,
-                  -2., -1.57, -2.618, -1.]
+def quaternion_conjugate(q):
+    """四元数共轭: [w, x, y, z] -> [w, -x, -y, -z]"""
+    return np.array([q[0], -q[1], -q[2], -q[3]])
 
-joint_limit_hi = [0.7854, 0.5240, 0.5260, 2.3561, 1.2217,
-                  0.7854, 0.3490, 0.526, 2.3561, 1.2217,
-                  2, 1.570, 2.618, 1.60,
-                  2, 0.35, 2.618, 1.60]
+def quaternion_multiply(q1, q2):
+    """四元数乘法: q1 ⊗ q2"""
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    
+    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
+    x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
+    y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
+    z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+    
+    return np.array([w, x, y, z])
+def get_all_body_poses(d, m):
+    """
+    获取MuJoCo模型中所有连杆在世界坐标系下的位置和姿态
+    
+    参数:
+        d: mujoco.MjData 对象
+        m: mujoco.MjModel 对象
+        
+    返回:
+        body_poses: 字典，键为连杆名称，值为包含位置、四元数、旋转矩阵等信息的字典
+    """
+    body_poses = {}
+    
+    # 遍历所有body（从1开始，跳过世界body，body_id=0）
+    for body_id in range(1, m.nbody):
+        # 获取连杆名称
+        body_name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, body_id)
+        
+        if body_name:  # 确保名称不为空（有些body可能没有名称）
+            # 获取世界坐标系下的位置和姿态
+            position = d.body(body_id).xpos.copy()      # 位置 (3,)
+            quaternion = d.body(body_id).xquat.copy()   # 四元数 (4,)
+            rotation_matrix = d.body(body_id).xmat.reshape(3, 3).copy()  # 旋转矩阵 (3,3)
+            
+            body_poses[body_name] = {
+                'body_id': body_id,
+                'position': position,
+                'quaternion': quaternion,
+                'rotation_matrix': rotation_matrix,
+                'xmat_flat': d.body(body_id).xmat.copy()  # 平坦化的旋转矩阵 (9,)
+            }
+    
+    return body_poses
 
-torque_limits = [100.0, 100.0, 100.0, 100.0, 100.0,
-                 100.0, 100.0, 100.0, 100.0, 100.0,
-                 30.0, 30.0, 30.0, 30.0,
-                 30.0, 30.0, 30.0, 30.0]
+def get_gravity_orientation(quaternion):
+    qw = quaternion[0]
+    qx = quaternion[1]
+    qy = quaternion[2]
+    qz = quaternion[3]
 
-xml_path = f'robots/x218dof/x2.xml'
-soft_dof_pos_limit = 0.98
-motion_start_times = torch.zeros(1, dtype=torch.float32, device="cpu")
+    gravity_orientation = np.zeros(3)
 
+    gravity_orientation[0] = 2 * (-qz * qx + qw * qy)
+    gravity_orientation[1] = -2 * (qz * qy + qw * qx)
+    gravity_orientation[2] = 1 - 2 * (qw * qw + qz * qz)
 
-policy_path = ("/home/wenconggan/whole_body_tracking/logs/rsl_rl/x2_flat/2025-09-01_11-17-33/exported/policy.onnx")
-# policy_path = "/home/wenconggan/mimic/logs/TEST/20250901_143937-TEST_Motion_Tracking-motion_tracking-x2/exported/model_16000.onnx"
+    return gravity_orientation
 
 
 def pd_control(target_q, q, kp, target_dq, dq, kd):
+    """Calculates torques from position commands"""
     return (target_q - q) * kp + (target_dq - dq) * kd
 
-class Sim2Sim():
-    def __init__(self, _cfg, ):
-        self.sign_mask = np.ones(18)
-        indices_to_flip = [2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17]  # 你可以改成你自己的目标索引
-        self.sign_mask[indices_to_flip] = -1
-        self.cfg = _cfg
-        # self.policy = _policy
-        self.target_q = np.zeros(self.cfg.env.num_actions, dtype=np.double)
-        self.action = np.zeros(self.cfg.env.num_actions, dtype=np.double)
-        self.action_filter = np.zeros(self.cfg.env.num_actions, dtype=np.double)
-        self.hist_obs = deque()
-        for _ in range(5):
-            self.hist_obs.append(np.zeros([1, 61], dtype=np.double))
-        self.model = mujoco.MjModel.from_xml_path(xml_path)
-        for i in range(self.model.njnt):
-            name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, i)
-            print(f"Joint {i}: {name}")
 
-        self.data = mujoco.MjData(self.model)
+joint_xml = [
+    "L_hip_yaw",
+    "L_hip_roll",
+    "L_hip_pitch",
+    "L_knee_pitch",
+    "L_ankle_pitch",
+    "R_hip_yaw",
+    "R_hip_roll",
+    "R_hip_pitch",
+    "R_knee_pitch",
+    "R_ankle_pitch",
+    "L_shoulder_pitch",
+    "L_shoulder_roll",
+    "L_shoulder_yaw",
+    "L_elbow_pitch",
+    "R_shoulder_pitch",
+    "R_shoulder_roll",
+    "R_shoulder_yaw",
+    "R_elbow_pitch",
+]
 
 
-    def get_obs(self, ):
 
-        q = self.data.qpos[7:]
-        dq = self.data.qvel[6:]
-        quat = self.data.qpos[3:7]
-        omega = self.data.qvel[3:6]
-        euler = quaternion_to_euler_array(quat)
-        # euler[euler > math.pi] -= 2 * math.pi
-        g_local = get_gravity_orientation_from_rpy(euler[0], euler[1])
-        gravity_orientation = g_local
-        return q, dq, omega, euler,gravity_orientation
 
-    def set_sim_target(self, target_q):
-        q = self.data.qpos.astype(np.double)[7:]
-        dq = self.data.qvel.astype(np.double)[6:]
-        tau = (target_q - q) * kps - dq * kds
-        self.data.ctrl = tau
-        mujoco.mj_step(self.model, self.data)
 
-    def run(self):
+if __name__ == "__main__":
+    # get config file name from command line
 
-        policy = load_onnx_policy(policy_path)
-        action = np.zeros(num_actions, dtype=np.float32)
-        obs = np.zeros(num_obs , dtype=np.float32)
-        counter = 0
+    import argparse
 
-        while True:
-            pbar = tqdm(range(int(self.cfg.env.run_duration / 0.001)), desc="Simulating")
-            m = mujoco.MjModel.from_xml_path(xml_path)
-            d = mujoco.MjData(m)
-            m.opt.timestep = simulation_dt
-            viewer = mujoco_viewer.MujocoViewer(m, d, width=2000, height=1000)
-            glfw.set_window_pos(viewer.window, 1000, 100)  # x, y
-            viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
-            viewer.cam.lookat = [0, 0, 1]
-            viewer.cam.distance = 3.0
-            viewer.cam.azimuth = 90
-            viewer.cam.elevation = -20
-            self.target_q = default_angles*self.sign_mask
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument("config_file", default=,type=str, help="config file name in the config folder")
+    # args = parser.parse_args()
+    # config_file = "/home/ym/Whole_body_tracking/configs/g1.yaml"
+    motion_file = "../../motion/chars.npz"
+    policy_path ="/home/wenconggan/whole_body_tracking/logs/rsl_rl/x2_flat/2025-09-01_11-17-33/exported/policy.onnx"
 
-            d.qpos[7:] = default_angles*self.sign_mask
+
+    motion =  np.load(motion_file)
+    motionpos = motion["body_pos_w"]
+    motionquat = motion["body_quat_w"]
+    motioninputpos = motion["joint_pos"]
+    motioninputvel = motion["joint_vel"]
+    i = 0
+
+    num_actions = 18
+    num_obs = 96
+    import onnx
+    model = onnx.load(policy_path)
+    for prop in model.metadata_props:
+        if prop.key == "joint_names":
+            joint_seq = prop.value.split(",")
+        if prop.key == "default_joint_pos":   
+            joint_pos_array_seq = np.array([float(x) for x in prop.value.split(",")])
+            joint_pos_array = np.array([joint_pos_array_seq[joint_seq.index(joint)] for joint in joint_xml])
+        if prop.key == "joint_stiffness":
+            stiffness_array_seq = np.array([float(x) for x in prop.value.split(",")])
+            stiffness_array = np.array([stiffness_array_seq[joint_seq.index(joint)] for joint in joint_xml])
+            # stiffness_array = np.array([])
+            
+        if prop.key == "joint_damping":
+            damping_array_seq = np.array([float(x) for x in prop.value.split(",")])
+            damping_array = np.array([damping_array_seq[joint_seq.index(joint)] for joint in joint_xml])        
+        
+        if prop.key == "action_scale":
+            action_scale = np.array([float(x) for x in prop.value.split(",")])
+        print(f"{prop.key}: {prop.value}")
+    action = np.zeros(num_actions, dtype=np.float32)
+    # target_dof_pos = default_angles.copy()
+    obs = np.zeros(num_obs, dtype=np.float32)
+
+    counter = 0
+
+    # Load robot model
+    m = mujoco.MjModel.from_xml_path(xml_path)
+    d = mujoco.MjData(m)
+    m.opt.timestep = simulation_dt
+
+    # load policy
+    # policy = torch.jit.load(policy_path)
+                
+    policy = onnxruntime.InferenceSession(policy_path)
+    input_name = policy.get_inputs()[0].name
+    output_name = policy.get_outputs()[0].name
+
+    action_buffer = np.zeros((num_actions,), dtype=np.float32)
+    timestep = 0
+    motioninput = np.concatenate((motioninputpos[timestep,:],motioninputvel[timestep,:]), axis=0)
+    motionposcurrent = motionpos[timestep,9,:]
+    motionquatcurrent = motionquat[timestep,9,:]
+    target_dof_pos = joint_pos_array.copy()
+    d.qpos[7:] = target_dof_pos
+    # target_dof_pos = joint_pos_array_seq
+    body_name = "pelvis_link"  # robot_ref_body_index=3 motion_ref_body_index=7
+    # body_name = "pelvis"
+    body_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    if body_id == -1:
+        raise ValueError(f"Body {body_name} not found in model")
+
+    with mujoco.viewer.launch_passive(m, d) as viewer:
+        # Close the viewer automatically after simulation_duration wall-seconds.
+        start = time.time()
+        while viewer.is_running() and time.time() - start < simulation_duration:
+            step_start = time.time()
+
             mujoco.mj_step(m, d)
-            for _ in pbar:
+            tau = pd_control(target_dof_pos, d.qpos[7:], stiffness_array, np.zeros_like(damping_array), d.qvel[6:], damping_array)# xml
 
-                    tau = pd_control(self.target_q, d.qpos[7:], kps, np.zeros_like(kds), d.qvel[6:], kds)
-                    d.ctrl[:] = tau
-                    mujoco.mj_step(m, d)
+            d.ctrl[:] = tau
+            counter += 1
+            if counter % control_decimation == 0:
+                # Apply control signal here.
+                position = d.xpos[body_id]
+                quaternion = d.xquat[body_id]
+                euler = quaternion_to_euler_array(quaternion)
+                g_local = get_gravity_orientation_from_rpy(euler[0], euler[1])
 
-                    counter += 1
+                motioninput = np.concatenate((motioninputpos[timestep,:],motioninputvel[timestep,:]),axis=0)
+                motionposcurrent = motionpos[timestep,9,:]
+                motionquatcurrent = motionquat[timestep,9,:]
+                anchor_quat = subtract_frame_transforms_mujoco(position,quaternion,motionposcurrent,motionquatcurrent)[1]
+                anchor_ori = np.zeros(9)
+                mujoco.mju_quat2Mat(anchor_ori, anchor_quat)
+                anchor_ori = anchor_ori.reshape(3, 3)[:, :2]
+                anchor_ori = anchor_ori.reshape(-1,)
+                # create observation
+                offset = 0
+                obs[0: 36] = motioninput
+                # obs[offset:offset + 6] = anchor_ori
+                # offset += 6
+                
+                angvel = quat_rotate_inverse_np(d.qpos[3:7], d.qvel[3 : 6])
+                obs[36:36 + 3] = g_local
+                obs[39:39 + 3] = d.qvel[3 : 6]
 
-                    if counter % control_decimation == 0:
-                        qj = (d.qpos[7:] - default_angles*self.sign_mask) * dof_pos_scale * self.sign_mask
-                        dqj = d.qvel[6:]  * dof_vel_scale * self.sign_mask
-                        omega = d.qvel[3:6] * ang_vel_scale
-                        quat = d.qpos[3:7]
-                        euler = quaternion_to_euler_array(quat)
-                        g_local = get_gravity_orientation_from_rpy(euler[0], euler[1])
-                        gravity_orientation = g_local
+                offset += 3
+                qpos_xml = d.qpos[7 : 7 + num_actions]  # joint positions
+                qpos_seq = np.array([qpos_xml[joint_xml.index(joint)] for joint in joint_seq])
+                obs[42: 42 + 18] = qpos_seq - joint_pos_array_seq  # joint positions
+                offset += num_actions
+                qvel_xml = d.qvel[6 : 6 + num_actions]  # joint positions
+                # print(qvel_xml)
 
-                        obs[:num_actions] = 0
-                        obs[num_actions:num_actions * 2] = 0
-                        obs[num_actions * 2 : num_actions * 2 +3] = gravity_orientation
-                        obs[num_actions * 2 + 3:num_actions * 2 + 3 + 3] = omega
-                        obs[num_actions * 2 + 3 + 3:num_actions * 3 + 3 + 3] = qj
-                        obs[num_actions * 4 + 3 + 3:] = dqj
+                qvel_seq = np.array([qvel_xml[joint_xml.index(joint)] for joint in joint_seq])
+                obs[60:60 + 18] = qvel_seq  # joint velocities
+                offset += num_actions   
+                obs[78:78 + 18] = action_buffer
 
-                        # 假设 time_step 是从 counter 或 step 计算出来
-                        time_step_val = np.array([[counter]], dtype=np.float32)
+                obs_tensor = torch.from_numpy(obs).unsqueeze(0)
+                action = policy.run(['actions'], {'obs': obs_tensor.numpy(),'time_step':np.array([timestep], dtype=np.float32).reshape(1,1)})[0]
+                # 
+                action = np.asarray(action).reshape(-1)
+                action_buffer = action.copy()
+                target_dof_pos = action * action_scale + joint_pos_array_seq
+                target_dof_pos = target_dof_pos.reshape(-1,)
+                target_dof_pos = np.array([target_dof_pos[joint_seq.index(joint)] for joint in joint_xml])
+                timestep+=1
+                
 
-                        obs_tensor = torch.from_numpy(obs).unsqueeze(0).cpu().numpy()
-                        action = policy(obs_tensor, time_step_val).cpu().numpy().squeeze()
+            # Pick up changes to the physics state, apply perturbations, update options from GUI.
+            viewer.sync()
 
-
-                        # obs_tensor = torch.from_numpy(obs).unsqueeze(0).reshape(1, -1).cpu().numpy()
-                        # action = policy(obs_tensor).detach().cpu().numpy().squeeze()
-                        self.action = action * self.sign_mask
-                        self.target_q = self.action * action_scale + default_angles*self.sign_mask
-                    viewer.render()
-
-if __name__ == '__main__':
-    # model_path = "../models/policy_1.pt"
-    # policy = torch.jit.load(model_path)
-    mybot = Sim2Sim(Config)
-    mybot.run()
-
+            # Rudimentary time keeping, will drift relative to wall clock.
+            time_until_next_step = m.opt.timestep - (time.time() - step_start)
+            if time_until_next_step > 0:
+                time.sleep(time_until_next_step)

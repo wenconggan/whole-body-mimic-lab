@@ -20,6 +20,9 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
+# parser.add_argument("--motion_file", type=str, required=True, help="Path to the motion file.")
+parser.add_argument("--resume_path", type=str, required=True, help="Path to the trained model checkpoint.")
+
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -104,12 +107,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     #         print("[WARN] No model artifact found in the run.")
     #     else:
     #         env_cfg.commands.motion.motion_file = str(pathlib.Path(art.download()) / "motion.npz")
-    env_cfg.commands.motion.motion_file = "/home/wenconggan/whole_body_tracking/motion/chars.npz"
+    # env_cfg.commands.motion.motion_file = "/home/wenconggan/whole_body_tracking/motion/chars.npz"
+    # resume_path = "/home/wenconggan/whole_body_tracking/logs/rsl_rl/x2_flat/2025-09-01_11-17-33/model_4000.pt"
 
+    env_cfg.commands.motion.motion_file = args_cli.motion_file
+    resume_path = args_cli.resume_path
 
     print(f"[INFO] Loading experiment from directory: {log_root_path}")
     # resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
-    resume_path = "/home/wenconggan/whole_body_tracking/logs/rsl_rl/x2_flat/2025-09-01_11-17-33/model_4000.pt"
+    # resume_path = "/home/wenconggan/whole_body_tracking/logs/rsl_rl/x2_flat/2025-09-01_11-17-33/model_4000.pt"
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
 
     # create isaac environment
