@@ -105,9 +105,10 @@ python scripts/rsl_rl/play.py \
 - Sim2Sim Mujoco :
 
 ```bash
+python scripts/rsl_rl/sim2sim.py  --policy_path /path/xxx.onnx --motion_file /path/xxx.npz
 
-cd scripts/rsl_rl
-python sim2sim.py
+
+python scripts/rsl_rl/sim2sim.py  --policy_path /home/wenconggan/whole_body_tracking/logs/rsl_rl/x2_flat/2025-09-01_11-17-33/exported/policy.onnx --motion_file /home/wenconggan/whole_body_tracking/motion/chars.npz
 
 ```
 
