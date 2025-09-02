@@ -40,8 +40,8 @@ def get_gravity_orientation_from_rpy(roll, pitch):
     g_world = np.array([0, 0, -1])
     g_local = rot.inv().apply(g_world)
     return g_local
-def quaternion_to_euler_array(quat):
 
+def quaternion_to_euler_array(quat):
     w ,x, y, z= quat
     t0 = +2.0 * (w * x + y * z)
     t1 = +1.0 - 2.0 * (x * x + y * y)
@@ -55,7 +55,6 @@ def quaternion_to_euler_array(quat):
     return np.array([roll_x, pitch_y,yaw_z])
 
 def pd_control(target_q, q, kp, target_dq, dq, kd):
-    """Calculates torques from position commands"""
     return (target_q - q) * kp + (target_dq - dq) * kd
 
 def quat_to_euler(quat):
@@ -73,7 +72,6 @@ def quat_to_euler(quat):
 
 
 def quat_rotate_inverse_np(q: np.ndarray, v: np.ndarray) -> np.ndarray:
-
     q_w = q[..., 0]
     q_vec = q[..., 1:]
     a = v * np.expand_dims(2.0 * q_w**2 - 1.0, axis=-1)
@@ -87,14 +85,12 @@ def quat_rotate_inverse_np(q: np.ndarray, v: np.ndarray) -> np.ndarray:
     return a - b + c
 
 def subtract_frame_transforms_mujoco(pos_a, quat_a, pos_b, quat_b):
-
     rotm_a = np.zeros(9)
     mujoco.mju_quat2Mat(rotm_a, quat_a)
     rotm_a = rotm_a.reshape(3, 3)
     rel_pos = rotm_a.T @ (pos_b - pos_a)
     rel_quat = quaternion_multiply(quaternion_conjugate(quat_a), quat_b)
     rel_quat = rel_quat / np.linalg.norm(rel_quat)
-    
     return rel_pos, rel_quat
 
 def quaternion_conjugate(q):
@@ -103,14 +99,11 @@ def quaternion_conjugate(q):
 def quaternion_multiply(q1, q2):
     w1, x1, y1, z1 = q1
     w2, x2, y2, z2 = q2
-    
     w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
     x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
     y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
     z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
-    
     return np.array([w, x, y, z])
-
 
 
 if __name__ == "__main__":
@@ -191,6 +184,11 @@ if __name__ == "__main__":
         start = time.time()
         while viewer.is_running() and time.time() - start < simulation_duration:
             step_start = time.time()
+            max_timestep = motion_joint_pos.shape[0]
+            if timestep >= max_timestep:
+                timestep = 0
+            frame_idx = timestep % motion_joint_pos.shape[0]
+            print(f"\rTimestep: {timestep} / {motion_joint_pos.shape[0]} (frame_idx: {frame_idx})", end="")
 
             mujoco.mj_step(m, d)
             tau = pd_control(target_dof_pos, d.qpos[7:], stiffness_array, np.zeros_like(damping_array), d.qvel[6:], damping_array)# xml
@@ -198,7 +196,7 @@ if __name__ == "__main__":
             d.ctrl[:] = tau
             counter += 1
             if counter % control_decimation == 0:
-                # Apply control signal here.
+
                 position = d.xpos[body_id]
                 quaternion = d.xquat[body_id]
                 euler = quaternion_to_euler_array(quaternion)

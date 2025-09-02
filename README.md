@@ -29,8 +29,13 @@ train any sim-to-real-ready motion in the LAFAN1 dataset, without tuning any par
 - Using a Python interpreter that has Isaac Lab installed, install the library
 
 ```bash
-python -m pip install -e source/x2_mimic_lab
+python -m pip install -e source/whole_body_tracking/
 ```
+## Lafan1 Motion Retargeting
+Refer to this repository 
+[![License]](https://github.com/wenconggan/Retarget_Motion_Lafan1.git)
+
+  
 
 ## Motion Tracking
 
@@ -108,7 +113,7 @@ python scripts/rsl_rl/play.py \
 python scripts/rsl_rl/sim2sim.py  --policy_path /path/xxx.onnx --motion_file /path/xxx.npz
 
 
-python scripts/rsl_rl/sim2sim.py  --policy_path /home/wenconggan/whole_body_tracking/logs/rsl_rl/x2_flat/2025-09-01_11-17-33/exported/policy.onnx --motion_file /home/wenconggan/whole_body_tracking/motion/chars.npz
+python scripts/rsl_rl/sim2sim.py  --policy_path /home/wenconggan/whole_body_tracking/logs/rsl_rl/x2_flat/2025-09-02_13-12-43/exported/policy.onnx --motion_file /home/wenconggan/whole_body_tracking/motion/chars.npz
 
 ```
 
